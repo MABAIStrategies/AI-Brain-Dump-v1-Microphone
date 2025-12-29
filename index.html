@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Voice → Google Sheet</title>
+  <meta name="description" content="Speak an idea. It gets categorized and logged to Google Sheets. Offline-first PWA.">
+  <meta name="theme-color" content="#0b1020">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true"></div>
+    <div class="brand-text">
+      <div class="brand-title">Voice → Google Sheet</div>
+      <div class="brand-sub">Personal capture system (offline-first)</div>
+    </div>
+  </div>
+  <div class="right">
+    <button id="btnSettings" class="btn ghost" title="Settings">Settings</button>
+    <span id="netBadge" class="badge ok" title="Connectivity"><span class="dot"></span><span id="netText">Online</span></span>
+  </div>
+</header>
+<main class="wrap">
+  <section class="card">
+    <div class="hd">
+      <div>
+        <h1>Capture</h1>
+        <p>Tap the mic, speak, then submit. The backend will categorize and write a row into your Google Sheet.</p>
+      </div>
+      <div class="row">
+        <button id="btnMic" class="btn primary"><span class="ic">🎤</span> <span id="micLabel">Start</span></button>
+        <button id="btnSubmit" class="btn gold">Send</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="grid">
+        <div class="field">
+          <label for="idea">Idea (raw)</label>
+          <textarea id="idea" placeholder="Or type here if speech isn't available"></textarea>
+          <div class="helper" id="speechHelper"></div>
+        </div>
+        <div class="side">
+          <div class="kpi">
+            <div class="kpi-label">Auto category</div>
+            <div class="kpi-val" id="kpiCategory">—</div>
+            <div class="kpi-sub" id="kpiConfidence">Confidence —</div>
+          </div>
+          <div class="field">
+            <label for="source">Source</label>
+            <select id="source">
+              <option value="Voice">Voice</option>
+              <option value="Typed">Typed</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="tags">Optional tags</label>
+            <input id="tags" placeholder="e.g. client, pricing, SOP">
+            <div class="helper">Comma-separated. Stored in the Sheet.</div>
+          </div>
+          <div class="hint">
+            <div class="hint-ic">ℹ️</div>
+            <div><b>Offline mode:</b> if you're offline, submissions queue locally and auto-sync when back online.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="sep"></div>
+    <div class="row">
+      <button id="btnPreview" class="btn ghost">Preview payload</button>
+      <button id="btnSync" class="btn ghost">Sync queued</button>
+      <span class="muted" id="statusLine">—</span>
+    </div>
+    <pre id="preview" class="mono" hidden></pre>
+  </section>
+  <section class="card">
+    <div class="hd">
+      <div>
+        <h2>Recent (local)</h2>
+        <p>Stored in your browser for quick recall. Your Google Sheet is the source of truth.</p>
+      </div>
+      <div class="row">
+        <button id="btnExportLocal" class="btn ghost">Export local JSON</button>
+        <button id="btnClearLocal" class="btn danger">Clear local</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div id="recent" class="list"></div>
+    </div>
+  </section>
+</main>
+<dialog id="settingsDlg" class="dlg">
+  <form method="dialog" class="dlg-inner">
+    <div class="dlg-hd">
+      <div>
+        <h3>Settings</h3>
+        <p>Paste your Apps Script Web App URL and token. The token is checked server-side.</p>
+      </div>
+      <button class="btn ghost" value="cancel">Close</button>
+    </div>
+    <div class="dlg-bd">
+      <div class="field">
+        <label for="endpoint">Apps Script Web App URL</label>
+        <input id="endpoint" placeholder="https://script.google.com/macros/.../exec">
+        <div class="helper">Required. See README for deployment steps.</div>
+      </div>
+      <div class="field">
+        <label for="token">Shared token</label>
+        <input id="token" placeholder="A long random string">
+        <div class="helper">Optional but strongly recommended. Store server-side in Script Properties.</div>
+      </div>
+      <div class="field">
+        <label for="defaultSheetName">Sheet tab name</label>
+        <input id="defaultSheetName" placeholder="AI Brain Dump">
+        <div class="helper">Must match the Sheet tab name inside your spreadsheet.</div>
+      </div>
+      <div class="field">
+        <label for="categories">Categories (comma-separated)</label>
+        <input id="categories" placeholder="Sales,Operations,Leadership,Automations,Agents,Strategy,Other">
+        <div class="helper">Used for UI display; server decides the category.</div>
+      </div>
+      <div class="sep"></div>
+      <div class="row">
+        <button id="btnSaveSettings" class="btn primary" value="default">Save</button>
+        <button class="btn danger" id="btnResetSettings" value="default">Reset</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+<script src="app.js"></script>
+</body>
+</html>
