@@ -1,220 +1,365 @@
-// Voice-to-Sheets PWA - Main JavaScript
-// Handles voice recording, transcription, and Google Sheets integration
+// =========================================
+// Voice → Google Sheet - Main App Logic
+// =========================================
+// Matches index.html element IDs: btnSettings, btnMic, btnSubmit, settingsDlg, etc.
 
-const recordBtn = document.getElementById('recordBtn');
-const statusDiv = document.getElementById('status');
-const transcriptDiv = document.getElementById('transcript');
-const settingsBtn = document.getElementById('settingsBtn');
-const settingsModal = document.getElementById('settingsModal');
-const closeSettings = document.querySelector('.close');
-const saveSettings = document.getElementById('saveSettings');
-const logsList = document.getElementById('logsList');
-const clearLogs = document.getElementById('clearLogs');
+// ---- DOM Elements ----
+const btnSettings = document.getElementById('btnSettings');
+const btnMic = document.getElementById('btnMic');
+const btnSubmit = document.getElementById('btnSubmit');
+const btnPreview = document.getElementById('btnPreview');
+const btnSync = document.getElementById('btnSync');
+const btnExportLocal = document.getElementById('btnExportLocal');
+const btnClearLocal = document.getElementById('btnClearLocal');
+const btnSaveSettings = document.getElementById('btnSaveSettings');
+const btnResetSettings = document.getElementById('btnResetSettings');
 
-let mediaRecorder;
-let audioChunks = [];
+const settingsDlg = document.getElementById('settingsDlg');
+const ideaTextarea = document.getElementById('idea');
+const sourceSelect = document.getElementById('source');
+const tagsInput = document.getElementById('tags');
+const speechHelper = document.getElementById('speechHelper');
+const kpiCategory = document.getElementById('kpiCategory');
+const kpiConfidence = document.getElementById('kpiConfidence');
+const statusLine = document.getElementById('statusLine');
+const preview = document.getElementById('preview');
+const recent = document.getElementById('recent');
+const micLabel = document.getElementById('micLabel');
+const netBadge = document.getElementById('netBadge');
+const netText = document.getElementById('netText');
+
+// Settings inputs
+const endpointInput = document.getElementById('endpoint');
+const tokenInput = document.getElementById('token');
+const defaultSheetNameInput = document.getElementById('defaultSheetName');
+const categoriesInput = document.getElementById('categories');
+
+// ---- State ----
 let isRecording = false;
+let mediaRecorder = null;
+let audioChunks = [];
+let recognition = null;
 
-// Load settings from localStorage
+// ---- Settings Management ----
 function loadSettings() {
-    const backend = localStorage.getItem('backendUrl');
-    const token = localStorage.getItem('token');
-    const sheet = localStorage.getItem('sheetName');
-    
-    if (backend) document.getElementById('backendUrl').value = backend;
-    if (token) document.getElementById('token').value = token;
-    if (sheet) document.getElementById('sheetName').value = sheet;
+  const endpoint = localStorage.getItem('endpoint') || '';
+  const token = localStorage.getItem('token') || '';
+  const sheetName = localStorage.getItem('defaultSheetName') || 'Brain Dump';
+  const cats = localStorage.getItem('categories') || 'Sales,Operations,Leadership,Automations,Agents,Strategy,Other';
+  
+  if (endpointInput) endpointInput.value = endpoint;
+  if (tokenInput) tokenInput.value = token;
+  if (defaultSheetNameInput) defaultSheetNameInput.value = sheetName;
+  if (categoriesInput) categoriesInput.value = cats;
 }
 
-// Save settings to localStorage
-function saveSettingsToStorage() {
-    const backend = document.getElementById('backendUrl').value;
-    const token = document.getElementById('token').value;
-    const sheet = document.getElementById('sheetName').value;
-    
-    localStorage.setItem('backendUrl', backend);
-    localStorage.setItem('token', token);
-    localStorage.setItem('sheetName', sheet);
-    
-    addLog('Settings saved successfully');
-    settingsModal.style.display = 'none';
+function saveSettings() {
+  const endpoint = endpointInput.value.trim();
+  const token = tokenInput.value.trim();
+  const sheetName = defaultSheetNameInput.value.trim() || 'Brain Dump';
+  const cats = categoriesInput.value.trim();
+  
+  localStorage.setItem('endpoint', endpoint);
+  localStorage.setItem('token', token);
+  localStorage.setItem('defaultSheetName', sheetName);
+  localStorage.setItem('categories', cats);
+  
+  updateStatus('Settings saved!', 'ok');
+  if (settingsDlg) settingsDlg.close();
 }
 
-// Add log entry
-function addLog(message) {
-    const timestamp = new Date().toLocaleString();
-    const logEntry = document.createElement('div');
-    logEntry.className = 'log-entry';
-    logEntry.innerHTML = `<strong>${timestamp}:</strong> ${message}`;
-    logsList.insertBefore(logEntry, logsList.firstChild);
-    
-    // Save to localStorage
-    saveLogs();
+function resetSettings() {
+  localStorage.clear();
+  loadSettings();
+  updateStatus('Settings reset', 'ok');
 }
 
-// Save logs to localStorage
-function saveLogs() {
-    const logs = [];
-    document.querySelectorAll('.log-entry').forEach(entry => {
-        logs.push(entry.innerHTML);
-    });
-    localStorage.setItem('logs', JSON.stringify(logs.slice(0, 50))); // Keep last 50
-}
-
-// Load logs from localStorage
-function loadLogs() {
-    const logs = JSON.parse(localStorage.getItem('logs') || '[]');
-    logs.forEach(log => {
-        const logEntry = document.createElement('div');
-        logEntry.className = 'log-entry';
-        logEntry.innerHTML = log;
-        logsList.appendChild(logEntry);
-    });
-}
-
-// Clear all logs
-function clearAllLogs() {
-    logsList.innerHTML = '';
-    localStorage.removeItem('logs');
-    addLog('Logs cleared');
-}
-
-// Update status message
-function updateStatus(message, type = 'info') {
-    statusDiv.textContent = message;
-    statusDiv.className = `status ${type}`;
-    addLog(`${type.toUpperCase()}: ${message}`);
-}
-
-// Start recording
-async function startRecording() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
-        
-        mediaRecorder.ondataavailable = (event) => {
-            audioChunks.push(event.data);
-        };
-        
-        mediaRecorder.onstop = async () => {
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-            await processAudio(audioBlob);
-            stream.getTracks().forEach(track => track.stop());
-        };
-        
-        mediaRecorder.start();
-        isRecording = true;
-        recordBtn.classList.add('recording');
-        recordBtn.textContent = '⏹️ Stop Recording';
-        updateStatus('Recording... Speak your idea', 'success');
-    } catch (error) {
-        updateStatus(`Microphone error: ${error.message}`, 'error');
+// ---- Speech Recognition Setup ----
+function initSpeechRecognition() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    speechHelper.textContent = 'Speech recognition not supported';
+    return null;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const recog = new SpeechRecognition();
+  recog.continuous = false;
+  recog.interimResults = true;
+  recog.lang = 'en-US';
+  
+  recog.onresult = (event) => {
+    let interim = '';
+    let final = '';
+    for (let i = 0; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        final += transcript + ' ';
+      } else {
+        interim += transcript;
+      }
     }
-}
-
-// Stop recording
-function stopRecording() {
-    if (mediaRecorder && isRecording) {
-        mediaRecorder.stop();
-        isRecording = false;
-        recordBtn.classList.remove('recording');
-        recordBtn.textContent = '🎤 Start Recording';
-        updateStatus('Processing audio...', 'info');
+    if (final) {
+      ideaTextarea.value = (ideaTextarea.value + final).trim();
     }
-}
-
-// Process audio and send to backend
-async function processAudio(audioBlob) {
-    const backendUrl = localStorage.getItem('backendUrl');
-    const token = localStorage.getItem('token');
-    const sheetName = localStorage.getItem('sheetName');
-    
-    if (!backendUrl || !token) {
-        updateStatus('Please configure settings first', 'error');
-        settingsModal.style.display = 'block';
-        return;
-    }
-    
-    try {
-        // Convert audio to base64
-        const reader = new FileReader();
-        reader.readAsDataURL(audioBlob);
-        
-        reader.onloadend = async () => {
-            const base64Audio = reader.result.split(',')[1];
-            
-            updateStatus('Transcribing and analyzing...', 'info');
-            
-            // Send to Google Apps Script backend
-            const response = await fetch(backendUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    token: token,
-                    sheetName: sheetName || 'Brain Dump',
-                    audio: base64Audio,
-                    mimeType: 'audio/webm'
-                })
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                transcriptDiv.innerHTML = `
-                    <p><strong>Transcript:</strong> ${result.transcript}</p>
-                    <p><strong>Category:</strong> ${result.category}</p>
-                    <p><strong>Confidence:</strong> ${result.confidence}</p>
-                `;
-                updateStatus('✅ Successfully logged to Google Sheet!', 'success');
-            } else {
-                updateStatus(`Error: ${result.error}`, 'error');
-                transcriptDiv.innerHTML = `<p class="error">Failed to process: ${result.error}</p>`;
-            }
-        };
-    } catch (error) {
-        updateStatus(`Processing error: ${error.message}`, 'error');
-        transcriptDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
-    }
-}
-
-// Event Listeners
-recordBtn.addEventListener('click', () => {
+    speechHelper.textContent = interim || '';
+  };
+  
+  recog.onerror = (event) => {
+    console.error('Speech recognition error', event.error);
+    speechHelper.textContent = 'Error: ' + event.error;
+    stopRecording();
+  };
+  
+  recog.onend = () => {
     if (isRecording) {
-        stopRecording();
+      // restart if still recording
+      try { recog.start(); } catch (e) { console.log(e); }
+    }
+  };
+  
+  return recog;
+}
+
+// ---- Recording Functions ----
+function startRecording() {
+  if (isRecording) return;
+  isRecording = true;
+  btnMic.classList.add('active');
+  micLabel.textContent = 'Stop';
+  speechHelper.textContent = 'Listening...';
+  
+  if (!recognition) recognition = initSpeechRecognition();
+  if (recognition) {
+    try {
+      recognition.start();
+    } catch (e) {
+      console.log('Recognition start error:', e);
+    }
+  }
+}
+
+function stopRecording() {
+  if (!isRecording) return;
+  isRecording = false;
+  btnMic.classList.remove('active');
+  micLabel.textContent = 'Start';
+  speechHelper.textContent = '';
+  
+  if (recognition) {
+    try {
+      recognition.stop();
+    } catch (e) {
+      console.log('Recognition stop error:', e);
+    }
+  }
+}
+
+function toggleRecording() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+// ---- Submit to Backend ----
+async function submitIdea() {
+  const endpoint = localStorage.getItem('endpoint');
+  const token = localStorage.getItem('token');
+  const sheetName = localStorage.getItem('defaultSheetName') || 'Brain Dump';
+  const idea = ideaTextarea.value.trim();
+  const source = sourceSelect.value;
+  const tags = tagsInput.value;
+  
+  if (!idea) {
+    updateStatus('Please enter an idea', 'error');
+    return;
+  }
+  
+  if (!endpoint) {
+    updateStatus('Please configure endpoint in Settings', 'error');
+    settingsDlg.showModal();
+    return;
+  }
+  
+  const payload = {
+    idea: idea,
+    source: source,
+    tags: tags,
+    sheetName: sheetName,
+    token: token
+  };
+  
+  // Save to local queue
+  saveToLocal(payload);
+  refreshRecent();
+  
+  // Try sending
+  updateStatus('Sending...', 'info');
+  kpiCategory.textContent = '...';
+  kpiConfidence.textContent = 'Processing...';
+  
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    const result = await response.json();
+    
+    if (result.success || response.ok) {
+      updateStatus('✅ Logged to Sheet!', 'ok');
+      kpiCategory.textContent = result.category || '—';
+      kpiConfidence.textContent = result.confidence ? `Confidence ${result.confidence}` : 'Confidence —';
+      
+      // Clear form
+      ideaTextarea.value = '';
+      tagsInput.value = '';
     } else {
-        startRecording();
+      updateStatus('❌ Error: ' + (result.error || 'Unknown'), 'error');
+      kpiCategory.textContent = '—';
+      kpiConfidence.textContent = 'Failed';
     }
+  } catch (error) {
+    updateStatus('❌ Network error: ' + error.message, 'error');
+    kpiCategory.textContent = '—';
+    kpiConfidence.textContent = 'Error';
+  }
+}
+
+// ---- Local Storage for Offline Queue ----
+function saveToLocal(payload) {
+  const queue = JSON.parse(localStorage.getItem('queue') || '[]');
+  queue.push({
+    ...payload,
+    timestamp: new Date().toISOString()
+  });
+  localStorage.setItem('queue', JSON.stringify(queue));
+}
+
+function refreshRecent() {
+  const queue = JSON.parse(localStorage.getItem('queue') || '[]');
+  recent.innerHTML = '';
+  
+  if (queue.length === 0) {
+    recent.innerHTML = '<div class="muted">No recent entries</div>';
+    return;
+  }
+  
+  queue.slice(-10).reverse().forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'list-item';
+    div.innerHTML = `
+      <div class="list-idea">${item.idea}</div>
+      <div class="list-meta">${item.source} • ${new Date(item.timestamp).toLocaleString()}</div>
+    `;
+    recent.appendChild(div);
+  });
+}
+
+function exportLocal() {
+  const queue = JSON.parse(localStorage.getItem('queue') || '[]');
+  const blob = new Blob([JSON.stringify(queue, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'voice-brain-dump-local.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function clearLocal() {
+  if (confirm('Clear all local entries? This cannot be undone.')) {
+    localStorage.removeItem('queue');
+    refreshRecent();
+    updateStatus('Local data cleared', 'ok');
+  }
+}
+
+function previewPayload() {
+  const endpoint = localStorage.getItem('endpoint');
+  const token = localStorage.getItem('token');
+  const sheetName = localStorage.getItem('defaultSheetName') || 'Brain Dump';
+  const idea = ideaTextarea.value.trim();
+  const source = sourceSelect.value;
+  const tags = tagsInput.value;
+  
+  const payload = {
+    idea: idea,
+    source: source,
+    tags: tags,
+    sheetName: sheetName,
+    token: token
+  };
+  
+  preview.hidden = false;
+  preview.textContent = JSON.stringify(payload, null, 2);
+}
+
+function syncQueued() {
+  updateStatus('Sync not yet implemented', 'info');
+}
+
+// ---- Status Updates ----
+function updateStatus(msg, type) {
+  statusLine.textContent = msg;
+  statusLine.className = 'muted';
+  if (type === 'error') statusLine.style.color = '#f44';
+  else if (type === 'ok') statusLine.style.color = '#4f4';
+  else statusLine.style.color = '#888';
+}
+
+// ---- Network Status ----
+function updateNetworkStatus() {
+  if (navigator.onLine) {
+    netBadge.className = 'badge ok';
+    netText.textContent = 'Online';
+  } else {
+    netBadge.className = 'badge warn';
+    netText.textContent = 'Offline';
+  }
+}
+
+// ---- Event Listeners ----
+if (btnSettings) btnSettings.addEventListener('click', () => {
+  loadSettings();
+  settingsDlg.showModal();
 });
 
-settingsBtn.addEventListener('click', () => {
-    settingsModal.style.display = 'block';
+if (btnMic) btnMic.addEventListener('click', toggleRecording);
+if (btnSubmit) btnSubmit.addEventListener('click', submitIdea);
+if (btnPreview) btnPreview.addEventListener('click', previewPayload);
+if (btnSync) btnSync.addEventListener('click', syncQueued);
+if (btnExportLocal) btnExportLocal.addEventListener('click', exportLocal);
+if (btnClearLocal) btnClearLocal.addEventListener('click', clearLocal);
+if (btnSaveSettings) btnSaveSettings.addEventListener('click', (e) => {
+  e.preventDefault();
+  saveSettings();
+});
+if (btnResetSettings) btnResetSettings.addEventListener('click', (e) => {
+  e.preventDefault();
+  resetSettings();
 });
 
-closeSettings.addEventListener('click', () => {
-    settingsModal.style.display = 'none';
+// Keyboard shortcuts
+ideaTextarea.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    submitIdea();
+  }
 });
 
-saveSettings.addEventListener('click', saveSettingsToStorage);
+window.addEventListener('online', updateNetworkStatus);
+window.addEventListener('offline', updateNetworkStatus);
 
-clearLogs.addEventListener('click', clearAllLogs);
-
-window.addEventListener('click', (event) => {
-    if (event.target === settingsModal) {
-        settingsModal.style.display = 'none';
-    }
-});
-
-// Initialize
+// ---- Initialization ----
 loadSettings();
-loadLogs();
-updateStatus('Ready to record', 'success');
+refreshRecent();
+updateNetworkStatus();
+updateStatus('Ready', 'ok');
 
-// Service Worker Registration
+// Service Worker
 if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js')
-        .then(() => addLog('Service Worker registered'))
-        .catch(err => addLog(`SW registration failed: ${err}`));
+  navigator.serviceWorker.register('/sw.js')
+    .then(() => console.log('Service Worker registered'))
+    .catch(err => console.log('SW registration failed:', err));
 }
